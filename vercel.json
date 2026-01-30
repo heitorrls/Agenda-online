@@ -2,6 +2,7 @@
   "version": 2,
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/backend/src/server.js" },
+    { "source": "/assets/(.*)", "destination": "/assets/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "builds": [
