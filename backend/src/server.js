@@ -2,31 +2,39 @@ const express = require('express');
 const { google } = require('googleapis');
 const path = require('path');
 const cors = require('cors');
-const fs = require('fs');
+// const fs = require('fs'); // Não vamos mais gravar arquivo em disco
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// --- DEBUG DA CHAVE DE SEGURANÇA ---
-const keyPath = path.join(__dirname, '../credentials.json');
-if (!fs.existsSync(keyPath)) {
-    console.error("❌ ERRO: O arquivo credentials.json não foi encontrado!");
+// --- LÓGICA ESPECIAL PARA VERCEL (Credenciais via Variável) ---
+// Em vez de ler arquivo, lemos a variável de ambiente e passamos o objeto direto
+let authConfig = {};
+
+if (process.env.GOOGLE_CREDENTIALS) {
+  // Se estiver na Vercel ou tiver a variável, usa o JSON direto
+  const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+  authConfig = {
+    credentials,
+    scopes: ['https://www.googleapis.com/auth/calendar'],
+  };
 } else {
-    console.log("✅ Arquivo de chave encontrado com sucesso.");
+  // Fallback para local (se ainda quiser usar arquivo no PC)
+  authConfig = {
+    keyFile: path.join(__dirname, '../credentials.json'),
+    scopes: ['https://www.googleapis.com/auth/calendar'],
+  };
 }
-// -----------------------------------
 
-const auth = new google.auth.GoogleAuth({
-  keyFile: keyPath,
-  scopes: ['https://www.googleapis.com/auth/calendar'],
-});
-
+const auth = new google.auth.GoogleAuth(authConfig);
 const calendar = google.calendar({ version: 'v3', auth });
-const CALENDAR_ID = 'agenda-clinica@agenda-clinica-484517.iam.gserviceaccount.com'; // Mantenha seu e-mail correto aqui
 
-// 1. Rota para Listar Eventos
+// Pega o ID da variável ou usa um fallback (Cuidado com dados sensíveis no código)
+const CALENDAR_ID = process.env.CALENDAR_ID || 'agenda-clinica@agenda-clinica-484517.iam.gserviceaccount.com';
+
+// Rota 1: Listar
 app.get('/api/eventos', async (req, res) => {
   try {
     const response = await calendar.events.list({
@@ -35,15 +43,13 @@ app.get('/api/eventos', async (req, res) => {
       singleEvents: true,
       orderBy: 'startTime',
     });
-    console.log(`🔎 Busca realizada: ${response.data.items.length} eventos encontrados.`);
     res.json(response.data.items);
   } catch (error) {
-    console.error('❌ Erro ao buscar eventos:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// 2. Rota para Agendar
+// Rota 2: Agendar
 app.post('/api/agendar', async (req, res) => {
   const { resumo, terapeuta, inicio, fim } = req.body;
   try {
@@ -52,56 +58,36 @@ app.post('/api/agendar', async (req, res) => {
       start: { dateTime: inicio },
       end: { dateTime: fim },
     };
-
     const response = await calendar.events.insert({
       calendarId: CALENDAR_ID,
       resource: event,
     });
-    console.log(`✅ Novo agendamento criado: ${terapeuta} - ${resumo}`);
     res.status(201).json(response.data);
   } catch (error) {
-    console.error('❌ Erro ao agendar:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// 3. Rota para Cancelar
+// Rota 3: Cancelar
 app.delete('/api/agendar/:id', async (req, res) => {
-  const eventId = req.params.id;
   try {
     await calendar.events.delete({
       calendarId: CALENDAR_ID,
-      eventId: eventId,
+      eventId: req.params.id,
     });
-    console.log(`🗑️ Agendamento cancelado (ID: ${eventId})`);
-    res.status(200).json({ message: "Cancelado com sucesso." });
+    res.status(200).json({ message: "Cancelado." });
   } catch (error) {
-    console.error('❌ Erro ao cancelar:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
-// 2. Rota para Agendar (Incluindo Telefone na descrição)
-app.post('/api/agendar', async (req, res) => {
-  const { resumo, terapeuta, telefone, inicio, fim } = req.body; // Recebe telefone
 
-  try {
-    const event = {
-      summary: `${terapeuta} - ${resumo}`, 
-      description: `Telefone/Obs: ${telefone || 'Não informado'}`, // Salva aqui!
-      start: { dateTime: inicio },
-      end: { dateTime: fim },
-    };
-
-    const response = await calendar.events.insert({
-      calendarId: CALENDAR_ID,
-      resource: event,
-    });
-    console.log(`✅ Agendado: ${terapeuta} - ${resumo}`);
-    res.status(201).json(response.data);
-  } catch (error) {
-    console.error('❌ Erro ao agendar:', error.message);
-    res.status(500).json({ error: error.message });
-  }
-});
+// --- EXPORTAÇÃO PARA VERCEL ---
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`🚀 Servidor da clínica rodando na porta ${PORT}`));
+
+// Só roda o app.listen se NÃO estiver na Vercel (ambiente local)
+if (require.main === module) {
+    app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT}`));
+}
+
+// Exporta o app para a Vercel transformar em Serverless Function
+module.exports = app;
